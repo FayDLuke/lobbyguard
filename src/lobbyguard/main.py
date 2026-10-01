@@ -1,10 +1,7 @@
 from endstone import GameMode, Player
 from endstone.event import (
     ActorSpawnEvent,
-    PlayerGameModeChangeEvent,
-    PlayerJoinEvent,
     PlayerMoveEvent,
-    PlayerTeleportEvent,
     event_handler,
 )
 from endstone.plugin import Plugin
@@ -122,10 +119,10 @@ class LobbyGuard(Plugin):
         self.save_default_config()
         self._load_config()
 
-        # UUID -> gamemode before entering lobby
+        # Player UUID/session ID -> previous gamemode
         self.previous_gamemodes = {}
 
-        # UUIDs currently inside the lobby
+        # Players currently inside lobby
         self.players_in_lobby = set()
 
         self.register_events(self)
@@ -143,21 +140,35 @@ class LobbyGuard(Plugin):
                 "LobbyGuard is disabled. Use /lobby set to configure it."
             )
 
-    # ================================================================
+    # ============================================================
     # CONFIG
-    # ================================================================
+    # ============================================================
 
     def _load_config(self):
         lobby = self.config.get("lobby", {})
 
         self.enabled = bool(lobby.get("enabled", False))
         self.world = str(lobby.get("world", ""))
-        self.center_x = float(lobby.get("center_x", 0.0))
-        self.center_z = float(lobby.get("center_z", 0.0))
-        self.radius = float(lobby.get("radius", 1000.0))
 
-        self.min_y = int(lobby.get("min_y", -64))
-        self.max_y = int(lobby.get("max_y", 320))
+        self.center_x = float(
+            lobby.get("center_x", 0.0)
+        )
+
+        self.center_z = float(
+            lobby.get("center_z", 0.0)
+        )
+
+        self.radius = float(
+            lobby.get("radius", 1000.0)
+        )
+
+        self.min_y = int(
+            lobby.get("min_y", -64)
+        )
+
+        self.max_y = int(
+            lobby.get("max_y", 320)
+        )
 
         self.force_adventure = bool(
             lobby.get("force_adventure", True)
@@ -183,9 +194,9 @@ class LobbyGuard(Plugin):
         self.save_config()
         self._load_config()
 
-    # ================================================================
-    # REGION
-    # ================================================================
+    # ============================================================
+    # LOBBY CHECK
+    # ============================================================
 
     def _is_in_lobby(self, location):
         if not self.enabled:
@@ -196,11 +207,18 @@ class LobbyGuard(Plugin):
 
         try:
             dimension = location.dimension
+        except Exception:
+            return False
+
+        if dimension is None:
+            return False
+
+        try:
             level = dimension.level
         except Exception:
             return False
 
-        if dimension is None or level is None:
+        if level is None:
             return False
 
         if level.name != self.world:
@@ -220,25 +238,19 @@ class LobbyGuard(Plugin):
             <= self.radius * self.radius
         )
 
-    # ================================================================
+    # ============================================================
     # PLAYER ID
-    # ================================================================
+    # ============================================================
 
     def _player_id(self, player):
-        """
-        Get a stable identifier for the current player session.
-        """
         try:
             return str(player.unique_id)
         except Exception:
-            try:
-                return player.name.lower()
-            except Exception:
-                return str(id(player))
+            return player.name.lower()
 
-    # ================================================================
-    # ENTER / LEAVE LOBBY
-    # ================================================================
+    # ============================================================
+    # ENTER LOBBY
+    # ============================================================
 
     def _enter_lobby(self, player):
         if player.is_op:
@@ -249,23 +261,36 @@ class LobbyGuard(Plugin):
 
         player_id = self._player_id(player)
 
-        if player_id not in self.players_in_lobby:
-            try:
-                current_mode = player.game_mode
-
-                if current_mode != GameMode.ADVENTURE:
-                    self.previous_gamemodes[player_id] = current_mode
-            except Exception:
-                return
-
-            self.players_in_lobby.add(player_id)
+        # Already processed.
+        if player_id in self.players_in_lobby:
+            return
 
         try:
-            if player.game_mode != GameMode.ADVENTURE:
+            current_mode = player.game_mode
+        except Exception:
+            return
+
+        # Save previous mode only once.
+        if current_mode != GameMode.ADVENTURE:
+            self.previous_gamemodes[player_id] = current_mode
+        else:
+            # If they were already Adventure, restore to Survival
+            # when they leave unless we know otherwise.
+            self.previous_gamemodes[player_id] = GameMode.SURVIVAL
+
+        self.players_in_lobby.add(player_id)
+
+        # Only change mode once.
+        try:
+            if current_mode != GameMode.ADVENTURE:
                 player.game_mode = GameMode.ADVENTURE
         except Exception:
-            # Player may have disconnected while the event was firing.
-            return
+            self.players_in_lobby.discard(player_id)
+            self.previous_gamemodes.pop(player_id, None)
+
+    # ============================================================
+    # LEAVE LOBBY
+    # ============================================================
 
     def _leave_lobby(self, player):
         if player.is_op:
@@ -287,240 +312,39 @@ class LobbyGuard(Plugin):
             if player.game_mode == GameMode.ADVENTURE:
                 player.game_mode = previous_mode
         except Exception:
-            # Player may have disconnected.
             return
 
-    def _update_player_lobby_state(self, player):
+    # ============================================================
+    # MOVEMENT
+    # ============================================================
+
+    @event_handler
+    def on_move(self, event: PlayerMoveEvent):
+        if not self.enabled:
+            return
+
+        player = event.player
+
         if player.is_op:
             return
 
-        inside = self._is_in_lobby(player.location)
+        try:
+            inside = self._is_in_lobby(player.location)
+        except Exception:
+            return
+
         player_id = self._player_id(player)
 
         if inside:
-            self._enter_lobby(player)
+            if player_id not in self.players_in_lobby:
+                self._enter_lobby(player)
         else:
             if player_id in self.players_in_lobby:
                 self._leave_lobby(player)
 
-    # ================================================================
-    # COMMAND
-    # ================================================================
-
-    def on_command(self, sender, command, args):
-        if command.name != "lobby":
-            return False
-
-        if not isinstance(sender, Player):
-            sender.send_message(
-                "§cThis command can only be used by a player."
-            )
-            return True
-
-        if not sender.is_op:
-            sender.send_message(
-                "§cYou do not have permission to use this command."
-            )
-            return True
-
-        if not args:
-            sender.send_message("§eLobbyGuard commands:")
-            sender.send_message(
-                "§7/lobby set §f- Set lobby center here."
-            )
-            sender.send_message(
-                "§7/lobby info §f- Show lobby information."
-            )
-            sender.send_message(
-                "§7/lobby reload §f- Reload configuration."
-            )
-            return True
-
-        action = args[0].lower()
-
-        # ------------------------------------------------------------
-        # SET
-        # ------------------------------------------------------------
-
-        if action == "set":
-            location = sender.location
-
-            try:
-                world = location.dimension.level.name
-            except Exception:
-                sender.send_message(
-                    "§cCould not determine the current world."
-                )
-                return True
-
-            self._save_lobby(
-                world,
-                location.x,
-                location.z,
-            )
-
-            sender.send_message(
-                "§aLobbyGuard configured successfully."
-            )
-
-            sender.send_message(
-                f"§7World: §f{world}"
-            )
-
-            sender.send_message(
-                f"§7Center: §f"
-                f"{location.x:.2f}, {location.z:.2f}"
-            )
-
-            sender.send_message(
-                f"§7Radius: §f{self.radius:.0f} blocks"
-            )
-
-            sender.send_message(
-                f"§7Height: §f"
-                f"{self.min_y} §7to §f{self.max_y}"
-            )
-
-            return True
-
-        # ------------------------------------------------------------
-        # INFO
-        # ------------------------------------------------------------
-
-        if action == "info":
-            if not self.enabled:
-                sender.send_message(
-                    "§eLobbyGuard is currently §cdisabled§e."
-                )
-                sender.send_message(
-                    "§7Use §f/lobby set §7to configure it."
-                )
-                return True
-
-            sender.send_message(
-                "§aLobbyGuard information:"
-            )
-
-            sender.send_message(
-                f"§7World: §f{self.world}"
-            )
-
-            sender.send_message(
-                f"§7Center: §f"
-                f"{self.center_x:.2f}, {self.center_z:.2f}"
-            )
-
-            sender.send_message(
-                f"§7Radius: §f{self.radius:.0f}"
-            )
-
-            sender.send_message(
-                f"§7Y range: §f"
-                f"{self.min_y} §7to {self.max_y}"
-            )
-
-            sender.send_message(
-                f"§7Adventure: §f"
-                f"{'enabled' if self.force_adventure else 'disabled'}"
-            )
-
-            sender.send_message(
-                f"§7Mob protection: §f"
-                f"{'enabled' if self.disable_mob_spawn else 'disabled'}"
-            )
-
-            return True
-
-        # ------------------------------------------------------------
-        # RELOAD
-        # ------------------------------------------------------------
-
-        if action == "reload":
-            self.reload_config()
-            self._load_config()
-
-            sender.send_message(
-                "§aLobbyGuard configuration reloaded."
-            )
-
-            return True
-
-        sender.send_message(
-            "§cUnknown subcommand."
-        )
-
-        sender.send_message(
-            "§7Use §f/lobby set§7, §f/lobby info§7, "
-            "or §f/lobby reload§7."
-        )
-
-        return True
-
-    # ================================================================
-    # EVENTS
-    # ================================================================
-
-    @event_handler
-    def on_join(self, event: PlayerJoinEvent):
-        player = event.player
-
-        # Don't touch OP players.
-        if player.is_op:
-            return
-
-        # Only process if lobby is enabled.
-        if not self.enabled:
-            return
-
-        # Apply state once after joining.
-        self._update_player_lobby_state(player)
-
-    @event_handler
-    def on_move(self, event: PlayerMoveEvent):
-        player = event.player
-
-        if player.is_op:
-            return
-
-        if not self.enabled:
-            return
-
-        self._update_player_lobby_state(player)
-
-    @event_handler
-    def on_teleport(self, event: PlayerTeleportEvent):
-        player = event.player
-
-        if player.is_op:
-            return
-
-        if not self.enabled:
-            return
-
-        self._update_player_lobby_state(player)
-
-    @event_handler
-    def on_gamemode_change(
-        self,
-        event: PlayerGameModeChangeEvent,
-    ):
-        player = event.player
-
-        if player.is_op:
-            return
-
-        if not self.enabled:
-            return
-
-        if not self.force_adventure:
-            return
-
-        if not self._is_in_lobby(player.location):
-            return
-
-        # Prevent non-OP players from changing away from Adventure.
-        if event.new_game_mode != GameMode.ADVENTURE:
-            event.cancelled = True
+    # ============================================================
+    # MOB SPAWN
+    # ============================================================
 
     @event_handler
     def on_actor_spawn(self, event: ActorSpawnEvent):
@@ -553,3 +377,127 @@ class LobbyGuard(Plugin):
 
         if self._is_in_lobby(location):
             event.cancelled = True
+
+    # ============================================================
+    # COMMAND
+    # ============================================================
+
+    def on_command(self, sender, command, args):
+        if command.name != "lobby":
+            return False
+
+        if not isinstance(sender, Player):
+            sender.send_message(
+                "§cThis command can only be used by a player."
+            )
+            return True
+
+        if not sender.is_op:
+            sender.send_message(
+                "§cYou do not have permission to use this command."
+            )
+            return True
+
+        if not args:
+            sender.send_message("§eLobbyGuard commands:")
+            sender.send_message(
+                "§7/lobby set §f- Set the lobby center."
+            )
+            sender.send_message(
+                "§7/lobby info §f- Show lobby information."
+            )
+            sender.send_message(
+                "§7/lobby reload §f- Reload configuration."
+            )
+            return True
+
+        action = args[0].lower()
+
+        if action == "set":
+            location = sender.location
+
+            try:
+                world = location.dimension.level.name
+            except Exception:
+                sender.send_message(
+                    "§cCould not determine the current world."
+                )
+                return True
+
+            self._save_lobby(
+                world,
+                location.x,
+                location.z,
+            )
+
+            sender.send_message(
+                "§aLobbyGuard configured successfully."
+            )
+
+            sender.send_message(
+                f"§7World: §f{world}"
+            )
+
+            sender.send_message(
+                f"§7Center: §f"
+                f"{location.x:.2f}, {location.z:.2f}"
+            )
+
+            sender.send_message(
+                f"§7Radius: §f"
+                f"{self.radius:.0f} blocks"
+            )
+
+            sender.send_message(
+                f"§7Height: §f"
+                f"{self.min_y} §7to {self.max_y}"
+            )
+
+            return True
+
+        if action == "info":
+            if not self.enabled:
+                sender.send_message(
+                    "§eLobbyGuard is currently §cdisabled§e."
+                )
+                return True
+
+            sender.send_message(
+                "§aLobbyGuard information:"
+            )
+
+            sender.send_message(
+                f"§7World: §f{self.world}"
+            )
+
+            sender.send_message(
+                f"§7Center: §f"
+                f"{self.center_x:.2f}, {self.center_z:.2f}"
+            )
+
+            sender.send_message(
+                f"§7Radius: §f{self.radius:.0f}"
+            )
+
+            sender.send_message(
+                f"§7Y range: §f"
+                f"{self.min_y} §7to {self.max_y}"
+            )
+
+            return True
+
+        if action == "reload":
+            self.reload_config()
+            self._load_config()
+
+            sender.send_message(
+                "§aLobbyGuard configuration reloaded."
+            )
+
+            return True
+
+        sender.send_message(
+            "§cUnknown subcommand."
+        )
+
+        return True
