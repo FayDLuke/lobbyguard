@@ -1,5 +1,4 @@
 from endstone import GameMode, Player
-from endstone.command import CommandSender
 from endstone.event import (
     ActorSpawnEvent,
     PlayerGameModeChangeEvent,
@@ -11,8 +10,6 @@ from endstone.event import (
 from endstone.plugin import Plugin
 
 
-# Vanilla entities that should not spawn inside the lobby.
-# Custom NPCs/entities are intentionally not included.
 VANILLA_MOBS = {
     # Hostile
     "minecraft:blaze",
@@ -43,7 +40,6 @@ VANILLA_MOBS = {
     "minecraft:stray",
     "minecraft:vex",
     "minecraft:vindicator",
-    "minecraft:warden",
     "minecraft:witch",
     "minecraft:wither",
     "minecraft:wither_skeleton",
@@ -93,7 +89,6 @@ VANILLA_MOBS = {
     "minecraft:turtle",
     "minecraft:villager",
     "minecraft:wandering_trader",
-    "minecraft:warden",
     "minecraft:wolf",
     "minecraft:zombie_horse",
 }
@@ -127,6 +122,12 @@ class LobbyGuard(Plugin):
         self.save_default_config()
         self._load_config()
 
+        # UUID -> gamemode before entering lobby
+        self.previous_gamemodes = {}
+
+        # UUIDs currently inside the lobby
+        self.players_in_lobby = set()
+
         self.register_events(self)
 
         self.logger.info("LobbyGuard enabled.")
@@ -142,40 +143,21 @@ class LobbyGuard(Plugin):
                 "LobbyGuard is disabled. Use /lobby set to configure it."
             )
 
-    # ------------------------------------------------------------------
-    # Configuration
-    # ------------------------------------------------------------------
+    # ================================================================
+    # CONFIG
+    # ================================================================
 
     def _load_config(self):
         lobby = self.config.get("lobby", {})
 
-        self.enabled = bool(
-            lobby.get("enabled", False)
-        )
+        self.enabled = bool(lobby.get("enabled", False))
+        self.world = str(lobby.get("world", ""))
+        self.center_x = float(lobby.get("center_x", 0.0))
+        self.center_z = float(lobby.get("center_z", 0.0))
+        self.radius = float(lobby.get("radius", 1000.0))
 
-        self.world = str(
-            lobby.get("world", "")
-        )
-
-        self.center_x = float(
-            lobby.get("center_x", 0.0)
-        )
-
-        self.center_z = float(
-            lobby.get("center_z", 0.0)
-        )
-
-        self.radius = float(
-            lobby.get("radius", 1000.0)
-        )
-
-        self.min_y = int(
-            lobby.get("min_y", -64)
-        )
-
-        self.max_y = int(
-            lobby.get("max_y", 320)
-        )
+        self.min_y = int(lobby.get("min_y", -64))
+        self.max_y = int(lobby.get("max_y", 320))
 
         self.force_adventure = bool(
             lobby.get("force_adventure", True)
@@ -201,9 +183,9 @@ class LobbyGuard(Plugin):
         self.save_config()
         self._load_config()
 
-    # ------------------------------------------------------------------
-    # Region detection
-    # ------------------------------------------------------------------
+    # ================================================================
+    # REGION
+    # ================================================================
 
     def _is_in_lobby(self, location):
         if not self.enabled:
@@ -214,18 +196,11 @@ class LobbyGuard(Plugin):
 
         try:
             dimension = location.dimension
-        except Exception:
-            return False
-
-        if dimension is None:
-            return False
-
-        try:
             level = dimension.level
         except Exception:
             return False
 
-        if level is None:
+        if dimension is None or level is None:
             return False
 
         if level.name != self.world:
@@ -241,31 +216,96 @@ class LobbyGuard(Plugin):
         dz = location.z - self.center_z
 
         return (
-            (dx * dx) + (dz * dz)
-            <= (self.radius * self.radius)
+            dx * dx + dz * dz
+            <= self.radius * self.radius
         )
 
-    # ------------------------------------------------------------------
-    # Player protection
-    # ------------------------------------------------------------------
+    # ================================================================
+    # PLAYER ID
+    # ================================================================
 
-    def _apply_lobby_gamemode(self, player):
-        if not self.force_adventure:
-            return
+    def _player_id(self, player):
+        """
+        Get a stable identifier for the current player session.
+        """
+        try:
+            return str(player.unique_id)
+        except Exception:
+            try:
+                return player.name.lower()
+            except Exception:
+                return str(id(player))
 
-        # OPs are completely exempt.
+    # ================================================================
+    # ENTER / LEAVE LOBBY
+    # ================================================================
+
+    def _enter_lobby(self, player):
         if player.is_op:
             return
 
-        if not self._is_in_lobby(player.location):
+        if not self.force_adventure:
             return
 
-        if player.game_mode != GameMode.ADVENTURE:
-            player.game_mode = GameMode.ADVENTURE
+        player_id = self._player_id(player)
 
-    # ------------------------------------------------------------------
-    # Commands
-    # ------------------------------------------------------------------
+        if player_id not in self.players_in_lobby:
+            try:
+                current_mode = player.game_mode
+
+                if current_mode != GameMode.ADVENTURE:
+                    self.previous_gamemodes[player_id] = current_mode
+            except Exception:
+                return
+
+            self.players_in_lobby.add(player_id)
+
+        try:
+            if player.game_mode != GameMode.ADVENTURE:
+                player.game_mode = GameMode.ADVENTURE
+        except Exception:
+            # Player may have disconnected while the event was firing.
+            return
+
+    def _leave_lobby(self, player):
+        if player.is_op:
+            return
+
+        player_id = self._player_id(player)
+
+        if player_id not in self.players_in_lobby:
+            return
+
+        self.players_in_lobby.discard(player_id)
+
+        previous_mode = self.previous_gamemodes.pop(
+            player_id,
+            GameMode.SURVIVAL,
+        )
+
+        try:
+            if player.game_mode == GameMode.ADVENTURE:
+                player.game_mode = previous_mode
+        except Exception:
+            # Player may have disconnected.
+            return
+
+    def _update_player_lobby_state(self, player):
+        if player.is_op:
+            return
+
+        inside = self._is_in_lobby(player.location)
+        player_id = self._player_id(player)
+
+        if inside:
+            self._enter_lobby(player)
+        else:
+            if player_id in self.players_in_lobby:
+                self._leave_lobby(player)
+
+    # ================================================================
+    # COMMAND
+    # ================================================================
 
     def on_command(self, sender, command, args):
         if command.name != "lobby":
@@ -284,25 +324,23 @@ class LobbyGuard(Plugin):
             return True
 
         if not args:
+            sender.send_message("§eLobbyGuard commands:")
             sender.send_message(
-                "§eLobbyGuard commands:"
+                "§7/lobby set §f- Set lobby center here."
             )
             sender.send_message(
-                "§7/lobby set §f- Set the lobby center here."
+                "§7/lobby info §f- Show lobby information."
             )
             sender.send_message(
-                "§7/lobby info §f- Show the current lobby."
-            )
-            sender.send_message(
-                "§7/lobby reload §f- Reload the configuration."
+                "§7/lobby reload §f- Reload configuration."
             )
             return True
 
         action = args[0].lower()
 
-        # --------------------------------------------------------------
-        # /lobby set
-        # --------------------------------------------------------------
+        # ------------------------------------------------------------
+        # SET
+        # ------------------------------------------------------------
 
         if action == "set":
             location = sender.location
@@ -339,24 +377,15 @@ class LobbyGuard(Plugin):
             )
 
             sender.send_message(
-                f"§7Height: §f{self.min_y} §7to §f{self.max_y}"
-            )
-
-            sender.send_message(
-                "§7Adventure protection: "
-                f"§f{'enabled' if self.force_adventure else 'disabled'}"
-            )
-
-            sender.send_message(
-                "§7Mob spawning: "
-                f"§f{'disabled' if self.disable_mob_spawn else 'enabled'}"
+                f"§7Height: §f"
+                f"{self.min_y} §7to §f{self.max_y}"
             )
 
             return True
 
-        # --------------------------------------------------------------
-        # /lobby info
-        # --------------------------------------------------------------
+        # ------------------------------------------------------------
+        # INFO
+        # ------------------------------------------------------------
 
         if action == "info":
             if not self.enabled:
@@ -387,7 +416,7 @@ class LobbyGuard(Plugin):
 
             sender.send_message(
                 f"§7Y range: §f"
-                f"{self.min_y} §7to §f{self.max_y}"
+                f"{self.min_y} §7to {self.max_y}"
             )
 
             sender.send_message(
@@ -402,9 +431,9 @@ class LobbyGuard(Plugin):
 
             return True
 
-        # --------------------------------------------------------------
-        # /lobby reload
-        # --------------------------------------------------------------
+        # ------------------------------------------------------------
+        # RELOAD
+        # ------------------------------------------------------------
 
         if action == "reload":
             self.reload_config()
@@ -427,21 +456,48 @@ class LobbyGuard(Plugin):
 
         return True
 
-    # ------------------------------------------------------------------
-    # Events
-    # ------------------------------------------------------------------
+    # ================================================================
+    # EVENTS
+    # ================================================================
 
     @event_handler
     def on_join(self, event: PlayerJoinEvent):
-        self._apply_lobby_gamemode(event.player)
+        player = event.player
+
+        # Don't touch OP players.
+        if player.is_op:
+            return
+
+        # Only process if lobby is enabled.
+        if not self.enabled:
+            return
+
+        # Apply state once after joining.
+        self._update_player_lobby_state(player)
 
     @event_handler
     def on_move(self, event: PlayerMoveEvent):
-        self._apply_lobby_gamemode(event.player)
+        player = event.player
+
+        if player.is_op:
+            return
+
+        if not self.enabled:
+            return
+
+        self._update_player_lobby_state(player)
 
     @event_handler
     def on_teleport(self, event: PlayerTeleportEvent):
-        self._apply_lobby_gamemode(event.player)
+        player = event.player
+
+        if player.is_op:
+            return
+
+        if not self.enabled:
+            return
+
+        self._update_player_lobby_state(player)
 
     @event_handler
     def on_gamemode_change(
@@ -450,8 +506,10 @@ class LobbyGuard(Plugin):
     ):
         player = event.player
 
-        # OP bypass.
         if player.is_op:
+            return
+
+        if not self.enabled:
             return
 
         if not self.force_adventure:
@@ -460,11 +518,15 @@ class LobbyGuard(Plugin):
         if not self._is_in_lobby(player.location):
             return
 
+        # Prevent non-OP players from changing away from Adventure.
         if event.new_game_mode != GameMode.ADVENTURE:
             event.cancelled = True
 
     @event_handler
     def on_actor_spawn(self, event: ActorSpawnEvent):
+        if not self.enabled:
+            return
+
         if not self.disable_mob_spawn:
             return
 
@@ -473,7 +535,6 @@ class LobbyGuard(Plugin):
         if actor is None:
             return
 
-        # Never interfere with players.
         if isinstance(actor, Player):
             return
 
@@ -482,10 +543,13 @@ class LobbyGuard(Plugin):
         except Exception:
             return
 
-        # Only block known vanilla mobs.
-        # This prevents custom NPCs/entities from being affected.
         if actor_type not in VANILLA_MOBS:
             return
 
-        if self._is_in_lobby(actor.location):
+        try:
+            location = actor.location
+        except Exception:
+            return
+
+        if self._is_in_lobby(location):
             event.cancelled = True
