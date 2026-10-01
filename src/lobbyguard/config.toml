@@ -1,0 +1,15 @@
+[lobby]
+enabled = false
+
+world = ""
+
+center_x = 0.0
+center_z = 0.0
+
+radius = 1000.0
+
+min_y = -64
+max_y = 320
+
+force_adventure = true
+disable_mob_spawn = true
