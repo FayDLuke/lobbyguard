@@ -4,6 +4,7 @@ from endstone.event import (
     PlayerMoveEvent,
     event_handler,
 )
+from endstone.level import Location
 from endstone.plugin import Plugin
 
 
@@ -34,6 +35,7 @@ VANILLA_MOBS = {
     "minecraft:silverfish",
     "minecraft:skeleton",
     "minecraft:slime",
+    "minecraft:spider",
     "minecraft:stray",
     "minecraft:vex",
     "minecraft:vindicator",
@@ -140,15 +142,16 @@ class LobbyGuard(Plugin):
                 "LobbyGuard is disabled. Use /lobby set to configure it."
             )
 
-    # ============================================================
-    # CONFIG
-    # ============================================================
-
     def _load_config(self):
         lobby = self.config.get("lobby", {})
 
-        self.enabled = bool(lobby.get("enabled", False))
-        self.world = str(lobby.get("world", ""))
+        self.enabled = bool(
+            lobby.get("enabled", False)
+        )
+
+        self.world = str(
+            lobby.get("world", "")
+        )
 
         self.center_x = float(
             lobby.get("center_x", 0.0)
@@ -178,25 +181,49 @@ class LobbyGuard(Plugin):
             lobby.get("disable_mob_spawn", True)
         )
 
+        # Auto teleport settings
+        self.teleport_below_y = float(
+            lobby.get("teleport_below_y", 150.0)
+        )
+
+        self.teleport_x = float(
+            lobby.get("teleport_x", 0.0)
+        )
+
+        self.teleport_y = float(
+            lobby.get("teleport_y", 150.0)
+        )
+
+        self.teleport_z = float(
+            lobby.get("teleport_z", 0.0)
+        )
+
     def _save_lobby(self, world, center_x, center_z):
         self.config["lobby"] = {
             "enabled": True,
+
             "world": world,
+
             "center_x": float(center_x),
             "center_z": float(center_z),
+
             "radius": self.radius,
+
             "min_y": self.min_y,
             "max_y": self.max_y,
+
             "force_adventure": self.force_adventure,
             "disable_mob_spawn": self.disable_mob_spawn,
+
+            "teleport_below_y": self.teleport_below_y,
+
+            "teleport_x": self.teleport_x,
+            "teleport_y": self.teleport_y,
+            "teleport_z": self.teleport_z,
         }
 
         self.save_config()
         self._load_config()
-
-    # ============================================================
-    # LOBBY CHECK
-    # ============================================================
 
     def _is_in_lobby(self, location):
         if not self.enabled:
@@ -238,19 +265,11 @@ class LobbyGuard(Plugin):
             <= self.radius * self.radius
         )
 
-    # ============================================================
-    # PLAYER ID
-    # ============================================================
-
     def _player_id(self, player):
         try:
             return str(player.unique_id)
         except Exception:
             return player.name.lower()
-
-    # ============================================================
-    # ENTER LOBBY
-    # ============================================================
 
     def _enter_lobby(self, player):
         if player.is_op:
@@ -261,7 +280,6 @@ class LobbyGuard(Plugin):
 
         player_id = self._player_id(player)
 
-        # Already processed.
         if player_id in self.players_in_lobby:
             return
 
@@ -270,27 +288,22 @@ class LobbyGuard(Plugin):
         except Exception:
             return
 
-        # Save previous mode only once.
         if current_mode != GameMode.ADVENTURE:
             self.previous_gamemodes[player_id] = current_mode
         else:
-            # If they were already Adventure, restore to Survival
-            # when they leave unless we know otherwise.
             self.previous_gamemodes[player_id] = GameMode.SURVIVAL
 
         self.players_in_lobby.add(player_id)
 
-        # Only change mode once.
         try:
             if current_mode != GameMode.ADVENTURE:
                 player.game_mode = GameMode.ADVENTURE
         except Exception:
             self.players_in_lobby.discard(player_id)
-            self.previous_gamemodes.pop(player_id, None)
-
-    # ============================================================
-    # LEAVE LOBBY
-    # ============================================================
+            self.previous_gamemodes.pop(
+                player_id,
+                None,
+            )
 
     def _leave_lobby(self, player):
         if player.is_op:
@@ -314,9 +327,47 @@ class LobbyGuard(Plugin):
         except Exception:
             return
 
-    # ============================================================
-    # MOVEMENT
-    # ============================================================
+    def _teleport_if_below_limit(self, player):
+        if not self.enabled:
+            return
+
+        if player.is_op:
+            return
+
+        try:
+            location = player.location
+        except Exception:
+            return
+
+        if location is None:
+            return
+
+        if not self._is_in_lobby(location):
+            return
+
+        if location.y >= self.teleport_below_y:
+            return
+
+        try:
+            dimension = location.dimension
+        except Exception:
+            return
+
+        if dimension is None:
+            return
+
+        try:
+            target = Location(
+                dimension,
+                self.teleport_x,
+                self.teleport_y,
+                self.teleport_z,
+            )
+
+            player.teleport(target)
+
+        except Exception:
+            return
 
     @event_handler
     def on_move(self, event: PlayerMoveEvent):
@@ -329,7 +380,9 @@ class LobbyGuard(Plugin):
             return
 
         try:
-            inside = self._is_in_lobby(player.location)
+            inside = self._is_in_lobby(
+                player.location
+            )
         except Exception:
             return
 
@@ -338,13 +391,12 @@ class LobbyGuard(Plugin):
         if inside:
             if player_id not in self.players_in_lobby:
                 self._enter_lobby(player)
+
+            self._teleport_if_below_limit(player)
+
         else:
             if player_id in self.players_in_lobby:
                 self._leave_lobby(player)
-
-    # ============================================================
-    # MOB SPAWN
-    # ============================================================
 
     @event_handler
     def on_actor_spawn(self, event: ActorSpawnEvent):
@@ -378,10 +430,6 @@ class LobbyGuard(Plugin):
         if self._is_in_lobby(location):
             event.cancelled = True
 
-    # ============================================================
-    # COMMAND
-    # ============================================================
-
     def on_command(self, sender, command, args):
         if command.name != "lobby":
             return False
@@ -399,16 +447,22 @@ class LobbyGuard(Plugin):
             return True
 
         if not args:
-            sender.send_message("§eLobbyGuard commands:")
+            sender.send_message(
+                "§eLobbyGuard commands:"
+            )
+
             sender.send_message(
                 "§7/lobby set §f- Set the lobby center."
             )
+
             sender.send_message(
                 "§7/lobby info §f- Show lobby information."
             )
+
             sender.send_message(
                 "§7/lobby reload §f- Reload configuration."
             )
+
             return True
 
         action = args[0].lower()
@@ -440,7 +494,8 @@ class LobbyGuard(Plugin):
 
             sender.send_message(
                 f"§7Center: §f"
-                f"{location.x:.2f}, {location.z:.2f}"
+                f"{location.x:.2f}, "
+                f"{location.z:.2f}"
             )
 
             sender.send_message(
@@ -451,6 +506,18 @@ class LobbyGuard(Plugin):
             sender.send_message(
                 f"§7Height: §f"
                 f"{self.min_y} §7to {self.max_y}"
+            )
+
+            sender.send_message(
+                f"§7Auto TP below Y: §f"
+                f"{self.teleport_below_y:.0f}"
+            )
+
+            sender.send_message(
+                f"§7TP destination: §f"
+                f"{self.teleport_x:.2f}, "
+                f"{self.teleport_y:.2f}, "
+                f"{self.teleport_z:.2f}"
             )
 
             return True
@@ -472,16 +539,30 @@ class LobbyGuard(Plugin):
 
             sender.send_message(
                 f"§7Center: §f"
-                f"{self.center_x:.2f}, {self.center_z:.2f}"
+                f"{self.center_x:.2f}, "
+                f"{self.center_z:.2f}"
             )
 
             sender.send_message(
-                f"§7Radius: §f{self.radius:.0f}"
+                f"§7Radius: §f"
+                f"{self.radius:.0f}"
             )
 
             sender.send_message(
                 f"§7Y range: §f"
                 f"{self.min_y} §7to {self.max_y}"
+            )
+
+            sender.send_message(
+                f"§7Auto TP below Y: §f"
+                f"{self.teleport_below_y:.0f}"
+            )
+
+            sender.send_message(
+                f"§7TP destination: §f"
+                f"{self.teleport_x:.2f}, "
+                f"{self.teleport_y:.2f}, "
+                f"{self.teleport_z:.2f}"
             )
 
             return True
