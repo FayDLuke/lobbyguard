@@ -1,7 +1,7 @@
 [lobby]
 enabled = false
 
-world = ""
+world = "world"
 
 center_x = 0.0
 center_z = 0.0
@@ -13,3 +13,11 @@ max_y = 320
 
 force_adventure = true
 disable_mob_spawn = true
+
+# Auto teleport player if Y is below this value
+teleport_below_y = 150.0
+
+# Teleport destination
+teleport_x = 0.0
+teleport_y = 150.0
+teleport_z = 0.0
