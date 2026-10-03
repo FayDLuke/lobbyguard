@@ -4,7 +4,7 @@ build-backend = "hatchling.build"
 
 [project]
 name = "endstone-lobby-protect"
-version = "1.1.2"
+version = "1.2.0"
 description = "Lobby protection for Endstone: no block breaking, no mob spawning, and void teleport."
 requires-python = ">=3.10"
 dependencies = ["tomlkit>=0.12"]

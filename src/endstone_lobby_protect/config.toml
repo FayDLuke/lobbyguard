@@ -21,6 +21,9 @@ pos2 = []
 # Fitur 1: pemain tidak bisa break block di area lobby
 block-break = true
 
+# Pemain tidak bisa place block di area lobby
+block-place = true
+
 # Pemain dengan permission "lobby_protect.bypass" (default: OP) boleh break block.
 # Set false kalau OP juga TIDAK boleh break di lobby.
 allow-bypass = true
@@ -50,7 +53,15 @@ pitch = 0.0
 # Kosongkan ("") untuk memakai dimension lobby di atas
 dimension = ""
 
+# Portal (/portal set, /portal addcmd). Data portal disimpan di portals.json
+[portal]
+# Seberapa sering cek pemain masuk portal (tick)
+check-interval-ticks = 2
+# Jeda minimal sebelum portal yang sama bisa trigger lagi untuk pemain yang sama
+cooldown-seconds = 2.0
+
 [messages]
 # Kosongkan ("") untuk mematikan pesan
 break-denied = "§cKamu tidak bisa menghancurkan block di lobby!"
+place-denied = "§cKamu tidak bisa memasang block di lobby!"
 teleported = ""
