@@ -1,0 +1,56 @@
+# ==========================================================
+#  Lobby Protect - config.toml
+#  Area lobby diatur lewat command in-game (jangan lupa berdiri di sudutnya):
+#     /lobbyprotect pos1
+#     /lobbyprotect pos2
+#  Hanya X dan Z yang diambil. Y tidak dipakai, jadi area terproteksi
+#  dari dasar sampai atas dunia (-64 sampai 320).
+#  Setelah edit manual file ini, jalankan /lobbyprotect reload
+# ==========================================================
+
+[lobby]
+# Dimension lobby (otomatis terisi dari posisi kamu saat /lobbyprotect pos1 / pos2)
+dimension = "Overworld"
+
+[lobby.area]
+# Format [x, z]. Diisi lewat command, kosongkan ([]) untuk menghapus.
+pos1 = []
+pos2 = []
+
+[protection]
+# Fitur 1: pemain tidak bisa break block di area lobby
+block-break = true
+
+# Pemain dengan permission "lobby_protect.bypass" (default: OP) boleh break block.
+# Set false kalau OP juga TIDAK boleh break di lobby.
+allow-bypass = true
+
+# Fitur 2: semua mob tidak bisa spawn di area lobby
+mob-spawn = true
+
+# Tipe entity yang TIDAK ikut diblokir spawn-nya (mis. NPC / armor stand dekorasi lobby).
+# Kosongkan (jadi []) kalau benar-benar semua mob harus diblokir.
+mob-spawn-whitelist = ["minecraft:npc", "minecraft:armor_stand"]
+
+# Fitur 3: kalau pemain di area lobby berada DI BAWAH koordinat Y tertentu,
+# otomatis di-teleport ke koordinat tujuan.
+[void-teleport]
+enabled = true
+below-y = 250.0
+
+# Seberapa sering dicek (dalam tick, 20 tick = 1 detik)
+check-interval-ticks = 5
+
+[void-teleport.destination]
+x = 0.5
+y = 260.0
+z = 0.5
+yaw = 0.0
+pitch = 0.0
+# Kosongkan ("") untuk memakai dimension lobby di atas
+dimension = ""
+
+[messages]
+# Kosongkan ("") untuk mematikan pesan
+break-denied = "§cKamu tidak bisa menghancurkan block di lobby!"
+teleported = ""
