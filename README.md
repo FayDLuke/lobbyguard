@@ -2,6 +2,11 @@
 
 Plugin Python untuk Endstone 0.11.x.
 
+## Set area lobby
+Berdiri di sudut pertama lalu `/lobbyprotect pos1`, pindah ke sudut seberangnya lalu `/lobbyprotect pos2`.
+Hanya X dan Z yang dipakai, Y diabaikan, jadi proteksi berlaku dari dasar sampai atas dunia.
+Command lain: `/lobbyprotect info`, `/lobbyprotect clear`, `/lobbyprotect reload` (alias `/lp`).
+
 ## Fitur
 1. Pemain tidak bisa break block di area lobby (OP bisa bypass lewat permission `lobby_protect.bypass`, bisa dimatikan di config)
 2. Semua mob tidak spawn di area lobby (ada whitelist untuk NPC / armor stand)

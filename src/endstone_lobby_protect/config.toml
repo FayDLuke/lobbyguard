@@ -1,21 +1,21 @@
 # ==========================================================
 #  Lobby Protect - config.toml
-#  Setelah edit, jalankan /lobbyprotect reload (atau restart server)
+#  Area lobby diatur lewat command in-game (jangan lupa berdiri di sudutnya):
+#     /lobbyprotect pos1
+#     /lobbyprotect pos2
+#  Hanya X dan Z yang diambil. Y tidak dipakai, jadi area terproteksi
+#  dari dasar sampai atas dunia (-64 sampai 320).
+#  Setelah edit manual file ini, jalankan /lobbyprotect reload
 # ==========================================================
 
 [lobby]
-# Nama dimension tempat lobby berada: "Overworld", "Nether", atau "TheEnd"
+# Dimension lobby (otomatis terisi dari posisi kamu saat /lobbyprotect pos1 / pos2)
 dimension = "Overworld"
 
-# Batas area lobby (sumbu X dan Z saja, Y tidak dibatasi).
-# enabled = false  -> SELURUH dimension di atas dianggap area lobby.
-# enabled = true   -> hanya kotak X/Z di bawah ini yang dianggap lobby.
 [lobby.area]
-enabled = false
-min-x = -100.0
-max-x = 100.0
-min-z = -100.0
-max-z = 100.0
+# Format [x, z]. Diisi lewat command, kosongkan ([]) untuk menghapus.
+pos1 = []
+pos2 = []
 
 [protection]
 # Fitur 1: pemain tidak bisa break block di area lobby
@@ -29,7 +29,7 @@ allow-bypass = true
 mob-spawn = true
 
 # Tipe entity yang TIDAK ikut diblokir spawn-nya (mis. NPC / armor stand dekorasi lobby).
-# Hapus isinya (jadi []) kalau benar-benar semua mob harus diblokir.
+# Kosongkan (jadi []) kalau benar-benar semua mob harus diblokir.
 mob-spawn-whitelist = ["minecraft:npc", "minecraft:armor_stand"]
 
 # Fitur 3: kalau pemain di area lobby berada DI BAWAH koordinat Y tertentu,

@@ -1,7 +1,9 @@
 from __future__ import annotations
 
+import math
 from dataclasses import dataclass, field
 
+import tomlkit
 from endstone import Player
 from endstone.actor import Mob
 from endstone.command import Command, CommandSender
@@ -23,11 +25,11 @@ def _norm_dim(name: str) -> str:
 @dataclass
 class Settings:
     dimension: str = "overworld"
-    area_enabled: bool = False
-    min_x: float = -100.0
-    max_x: float = 100.0
-    min_z: float = -100.0
-    max_z: float = 100.0
+    area_set: bool = False
+    min_x: int = 0
+    max_x: int = 0
+    min_z: int = 0
+    max_z: int = 0
 
     block_break: bool = True
     allow_bypass: bool = True
@@ -54,15 +56,21 @@ class LobbyProtectPlugin(Plugin):
     commands = {
         "lobbyprotect": {
             "description": "Lobby Protect admin command.",
-            "usages": ["/lobbyprotect reload"],
+            "usages": [
+                "/lobbyprotect pos1",
+                "/lobbyprotect pos2",
+                "/lobbyprotect info",
+                "/lobbyprotect clear",
+                "/lobbyprotect reload",
+            ],
             "aliases": ["lp"],
-            "permissions": ["lobby_protect.command.reload"],
+            "permissions": ["lobby_protect.command.admin"],
         }
     }
 
     permissions = {
-        "lobby_protect.command.reload": {
-            "description": "Allow reloading the Lobby Protect config.",
+        "lobby_protect.command.admin": {
+            "description": "Allow managing the Lobby Protect area and config.",
             "default": "op",
         },
         BYPASS_PERMISSION: {
@@ -88,15 +96,74 @@ class LobbyProtectPlugin(Plugin):
         self._stop_task()
 
     def on_command(self, sender: CommandSender, command: Command, args: list[str]) -> bool:
-        if command.name == "lobbyprotect":
-            if len(args) == 1 and args[0].lower() == "reload":
-                self._load_settings()
-                self._stop_task()
-                self._start_task()
-                sender.send_message("§aLobby Protect config reloaded.")
-            else:
-                sender.send_message("§eUsage: /lobbyprotect reload")
+        if command.name != "lobbyprotect":
+            return True
+
+        sub = args[0].lower() if args else ""
+
+        if sub in ("pos1", "pos2"):
+            if not isinstance(sender, Player):
+                sender.send_message("§cCommand ini hanya bisa dipakai pemain di dalam game.")
+                return True
+            self._set_pos(sender, sub)
+        elif sub == "info":
+            self._send_info(sender)
+        elif sub == "clear":
+            cfg = self.config
+            area = self._area_table(cfg)
+            area["pos1"] = []
+            area["pos2"] = []
+            self.save_config()
+            self._load_settings()
+            sender.send_message("§eArea lobby dihapus. Selama pos1/pos2 belum diset, tidak ada area yang diproteksi.")
+        elif sub == "reload":
+            self._load_settings()
+            self._stop_task()
+            self._start_task()
+            sender.send_message("§aLobby Protect config reloaded.")
+        else:
+            sender.send_message("§eUsage: /lobbyprotect <pos1|pos2|info|clear|reload>")
         return True
+
+    @staticmethod
+    def _area_table(cfg):
+        if "lobby" not in cfg:
+            cfg["lobby"] = tomlkit.table()
+        if "area" not in cfg["lobby"]:
+            cfg["lobby"]["area"] = tomlkit.table()
+        return cfg["lobby"]["area"]
+
+    def _set_pos(self, player: Player, which: str) -> None:
+        loc = player.location
+        bx, bz = math.floor(loc.x), math.floor(loc.z)
+
+        cfg = self.config
+        if "lobby" not in cfg:
+            cfg["lobby"] = tomlkit.table()
+        cfg["lobby"]["dimension"] = player.dimension.name
+        self._area_table(cfg)[which] = [bx, bz]
+        self.save_config()
+        self._load_settings()
+
+        player.send_message(f"§a{which} diset di X={bx}, Z={bz} ({player.dimension.name}). Y tidak dipakai.")
+        if self.s.area_set:
+            s = self.s
+            player.send_message(
+                f"§aArea lobby aktif: X {s.min_x}..{s.max_x}, Z {s.min_z}..{s.max_z} (semua ketinggian)."
+            )
+        else:
+            other = "pos2" if which == "pos1" else "pos1"
+            player.send_message(f"§eSekarang set {other} juga supaya area aktif.")
+
+    def _send_info(self, sender: CommandSender) -> None:
+        s = self.s
+        if s.area_set:
+            sender.send_message(
+                f"§aArea lobby: dimension {s.dimension}, X {s.min_x}..{s.max_x}, "
+                f"Z {s.min_z}..{s.max_z}, semua ketinggian."
+            )
+        else:
+            sender.send_message("§eArea lobby belum lengkap. Set dengan /lobbyprotect pos1 dan /lobbyprotect pos2.")
 
     # ------------------------------------------------------------------ config
     def _load_settings(self) -> None:
@@ -113,11 +180,16 @@ class LobbyProtectPlugin(Plugin):
 
         s = Settings()
         s.dimension = _norm_dim(get("lobby.dimension", "Overworld"))
-        s.area_enabled = bool(get("lobby.area.enabled", False))
-        x1, x2 = float(get("lobby.area.min-x", -100.0)), float(get("lobby.area.max-x", 100.0))
-        z1, z2 = float(get("lobby.area.min-z", -100.0)), float(get("lobby.area.max-z", 100.0))
-        s.min_x, s.max_x = min(x1, x2), max(x1, x2)
-        s.min_z, s.max_z = min(z1, z2), max(z1, z2)
+        pos1 = get("lobby.area.pos1", [])
+        pos2 = get("lobby.area.pos2", [])
+        if len(pos1) == 2 and len(pos2) == 2:
+            x1, z1 = math.floor(float(pos1[0])), math.floor(float(pos1[1]))
+            x2, z2 = math.floor(float(pos2[0])), math.floor(float(pos2[1]))
+            s.min_x, s.max_x = min(x1, x2), max(x1, x2)
+            s.min_z, s.max_z = min(z1, z2), max(z1, z2)
+            s.area_set = True
+        else:
+            s.area_set = False
 
         s.block_break = bool(get("protection.block-break", True))
         s.allow_bypass = bool(get("protection.allow-bypass", True))
@@ -138,6 +210,9 @@ class LobbyProtectPlugin(Plugin):
         s.msg_teleported = str(get("messages.teleported", ""))
         self.s = s
 
+        if not s.area_set:
+            self.logger.warning("Area lobby belum diset. Pakai /lobbyprotect pos1 dan /lobbyprotect pos2.")
+
         if s.tp_enabled and s.dest_y < s.below_y:
             self.logger.warning(
                 f"Destination Y ({s.dest_y}) lebih kecil dari below-y ({s.below_y}); "
@@ -146,12 +221,12 @@ class LobbyProtectPlugin(Plugin):
 
     # ------------------------------------------------------------------ helpers
     def _in_lobby(self, dim_name: str, x: float, z: float) -> bool:
+        """Cek X/Z saja (Y diabaikan, jadi berlaku dari dasar sampai atas dunia)."""
         s = self.s
-        if _norm_dim(dim_name) != s.dimension:
+        if not s.area_set or _norm_dim(dim_name) != s.dimension:
             return False
-        if not s.area_enabled:
-            return True
-        return s.min_x <= x <= s.max_x and s.min_z <= z <= s.max_z
+        bx, bz = math.floor(x), math.floor(z)
+        return s.min_x <= bx <= s.max_x and s.min_z <= bz <= s.max_z
 
     # ------------------------------------------------------------------ fitur 1
     @event_handler
