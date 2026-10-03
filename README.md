@@ -17,5 +17,5 @@ Command lain: `/lobbyprotect info`, `/lobbyprotect clear`, `/lobbyprotect reload
 pip install build
 python -m build --wheel
 ```
-Copy file `dist/endstone_lobby_protect-1.0.0-py3-none-any.whl` ke folder `plugins/` server Endstone.
+Copy file `dist/endstone_lobby_protect-1.1.1-py3-none-any.whl` ke folder `plugins/` server Endstone.
 Config otomatis dibuat di `plugins/lobby_protect/config.toml`. Reload: `/lobbyprotect reload`.
